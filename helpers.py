@@ -22,8 +22,8 @@ from networkx.generators.community import LFR_benchmark_graph
 from itertools import count
 
 
-def generate_LFR_network(num_vertices, avg_degree):
-    return nx.LFR_benchmark_graph(num_vertices, 3, 1.5, 0.1, avg_degree, min_community=50, max_iters=5000)
+def generate_LFR_network(num_vertices, mu, avg_degree):
+    return nx.LFR_benchmark_graph(num_vertices, 3, 1.5, mu, avg_degree, min_community=50, max_iters=5000)
 
 def create_adjacency_matrix(graph):
     return np.asarray(nx.adjacency_matrix(graph).todense())

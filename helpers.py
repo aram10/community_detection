@@ -6,6 +6,7 @@ import networkx as nx
 import random
 import pickle
 import itertools
+import math
 
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
@@ -22,25 +23,31 @@ from networkx.generators.community import LFR_benchmark_graph
 from itertools import count
 
 
-def generate_LFR_network(num_vertices, mu, avg_degree):
-    return nx.LFR_benchmark_graph(num_vertices, 3, 1.5, mu, avg_degree, min_community=50, max_iters=5000)
+def generate_LFR_network(num_vertices, mu, avg_degree, max_deg, min_c, max_c, max_i):
+    return nx.LFR_benchmark_graph(num_vertices, 2, 1.2, mu, avg_degree, max_degree=max_deg, min_community=min_c, max_community=max_c, max_iters=max_i)
 
 def create_adjacency_matrix(graph):
     return np.asarray(nx.adjacency_matrix(graph).todense())
 
 def create_pairwise_community_indicator_matrix(community_list):
-    num_vertices = len(community_list)
+    num_vertices = len([v for sublist in community_list for v in sublist])
     H = np.zeros(shape=(num_vertices, num_vertices))
     for community in community_list:
-        for pair in itertools.combinations_with_replacement(community_list, 2):
+        for pair in itertools.combinations_with_replacement(community, 2):
             H[pair[0],pair[1]] = 1
     return H
 
-def create_laplacian_matrix(ci_matrix):
-    return tf.linalg.diag(tf.reduce_sum(ci_matrix, 1)) - ci_matrix
+def create_degree_matrix(X):
+    return np.diag(np.sum(X, axis=1))
 
-def combine_data(B, L):
-    return np.concatenate((B,L), axis=1)
+def create_laplacian(A):
+    return create_degree_matrix(A) - A
+
+def create_normalized_laplacian(A):
+    func = np.vectorize(lambda i : 1/(math.sqrt(i)))
+    D = create_degree_matrix(A)
+    D2 = np.diag(func(D.diagonal()))
+    return np.matmul(D2, np.matmul(A, D2))
 
 def get_community_list(graph, name):
     com_list = list({frozenset(graph.nodes[v][name]) for v in graph})
@@ -81,7 +88,7 @@ def plot_communities(graph, name):
     nc = nx.draw_networkx_nodes(graph, pos, nodelist=nodes, node_color=colors, 
                             with_labels=False, node_size=100, cmap=plt.cm.jet)
 
-def karate_club_communities(graph):
+def karate_club_labels(graph):
     clublist = [(graph.nodes[v]['club']) for v in graph]
     communities = np.zeros(len(graph), dtype=int)
     x = 0
@@ -90,3 +97,13 @@ def karate_club_communities(graph):
             communities[x] = 1
         x += 1
     return communities
+
+def karate_club_communities(graph):
+    c1 = []
+    c2 = []
+    for x in range(len(graph)):
+        if graph.nodes[x]['club'] == 'Officer':
+            c1.append(x)
+        else:
+            c2.append(x)
+    return [c1, c2]

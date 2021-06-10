@@ -22,20 +22,30 @@ from sklearn.metrics.cluster import normalized_mutual_info_score
 from networkx.generators.community import LFR_benchmark_graph
 from itertools import count
 
-
-def generate_LFR_network(num_vertices, mu, avg_degree, max_deg, min_c, max_c, max_i):
-    return nx.LFR_benchmark_graph(num_vertices, 2, 1.2, mu, avg_degree, max_degree=max_deg, min_community=min_c, max_community=max_c, max_iters=max_i)
+#see "Incorporating network structure with node contents for community detection on large networks using deep learning"
+def adjacency_to_similarity(A):
+    S = np.zeros(shape=np.shape(A))
+    n = np.shape(A)[0]
+    for i in range(n):
+        for j in range(n):
+            row_i = A[i]
+            row_j = A[j]
+            S[i,j] = 2 * np.sum(np.bitwise_and(row_i, row_j)) / (np.sum(row_i) + np.sum(row_j))
+            
+def cora_labels(graph):
+    n = len(graph)
+    communities_list = list(frozenset((graph.nodes[node]['gt']) for node in graph.nodes))
+    communities = {}
+    for x in range(len(communities_list)):
+        communities[communities_list[x]] = x
+    labels = []
+    for node in graph.nodes:
+        labels.append(communities[graph.nodes[node]['gt']])
+    labels = np.asarray(labels, dtype=int)
+    return labels
 
 def create_adjacency_matrix(graph):
     return np.asarray(nx.adjacency_matrix(graph).todense())
-
-def create_pairwise_community_indicator_matrix(community_list):
-    num_vertices = len([v for sublist in community_list for v in sublist])
-    H = np.zeros(shape=(num_vertices, num_vertices))
-    for community in community_list:
-        for pair in itertools.combinations_with_replacement(community, 2):
-            H[pair[0],pair[1]] = 1
-    return H
 
 def create_degree_matrix(X):
     return np.diag(np.sum(X, axis=1))
@@ -49,11 +59,17 @@ def create_normalized_laplacian(A):
     D2 = np.diag(func(D.diagonal()))
     return np.matmul(D2, np.matmul(A, D2))
 
-def get_community_list(graph, name):
-    com_list = list({frozenset(graph.nodes[v][name]) for v in graph})
-    communities = [list(com_list[x]) for x in range(0, len(com_list))]
-    return communities
-    
+def create_pairwise_community_indicator_matrix(community_list):
+    num_vertices = len([v for sublist in community_list for v in sublist])
+    H = np.zeros(shape=(num_vertices, num_vertices))
+    for community in community_list:
+        for pair in itertools.combinations_with_replacement(community, 2):
+            H[pair[0],pair[1]] = 1
+    return H
+
+def generate_LFR_network(num_vertices, mu, avg_degree, max_deg, min_c, max_c, max_i):
+    return nx.LFR_benchmark_graph(num_vertices, 2, 1.2, mu, avg_degree, max_degree=max_deg, min_community=min_c, max_community=max_c, max_iters=max_i)
+
 def get_community_labels(graph, name):
     communities = get_community_list(graph, name)
     labels = np.zeros(len(graph), dtype=int)
@@ -64,29 +80,13 @@ def get_community_labels(graph, name):
         x += 1
     return labels
 
-def get_num_communities(graph, name):
-    return len(list({frozenset(graph.nodes[v][name]) for v in graph}))
-
-def reconstruct_communities(labels):
-    communities = {}
-    for x in range(max(labels)+1):
-        communities[x] = []
-    i = 0
-    for x in labels:
-        communities[x].append(i)
-        i += 1
+def get_community_list(graph, name):
+    com_list = list({frozenset(graph.nodes[v][name]) for v in graph})
+    communities = [list(com_list[x]) for x in range(0, len(com_list))]
     return communities
 
-def plot_communities(graph, name):
-    groups = set(nx.get_node_attributes(graph,name).values())
-    mapping = dict(zip(sorted(groups),count()))
-    nodes = graph.nodes()
-    colors = [mapping[graph.node[n][name]] for n in nodes]
-
-    pos = nx.spring_layout(graph)
-    ec = nx.draw_networkx_edges(graph, pos, alpha=0.2)
-    nc = nx.draw_networkx_nodes(graph, pos, nodelist=nodes, node_color=colors, 
-                            with_labels=False, node_size=100, cmap=plt.cm.jet)
+def get_num_communities(graph, name):
+    return len(list({frozenset(graph.nodes[v][name]) for v in graph}))
 
 def karate_club_labels(graph):
     clublist = [(graph.nodes[v]['club']) for v in graph]
@@ -107,3 +107,35 @@ def karate_club_communities(graph):
         else:
             c2.append(x)
     return [c1, c2]
+
+def plot_communities(graph, name):
+    groups = set(nx.get_node_attributes(graph,name).values())
+    mapping = dict(zip(sorted(groups),count()))
+    nodes = graph.nodes()
+    colors = [mapping[graph.node[n][name]] for n in nodes]
+
+    pos = nx.spring_layout(graph)
+    ec = nx.draw_networkx_edges(graph, pos, alpha=0.2)
+    nc = nx.draw_networkx_nodes(graph, pos, nodelist=nodes, node_color=colors, 
+                            with_labels=False, node_size=100, cmap=plt.cm.jet)
+    
+def polbooks_labels(graph):
+    n = len(graph)
+    communities = {'l': 0, 'n': 1, 'c': 2}
+    labels = []
+    for node in graph.nodes:
+        labels.append(communities[graph.nodes[node]['value']])
+    labels = np.asarray(labels, dtype=int)
+    return labels
+
+def reconstruct_communities(labels):
+    communities = {}
+    for x in range(max(labels)+1):
+        communities[x] = []
+    i = 0
+    for x in labels:
+        communities[x].append(i)
+        i += 1
+    for x in communities:
+        communities[x].sort()
+    return communities

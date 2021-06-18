@@ -15,14 +15,25 @@ from tensorflow.keras import layers
 from tensorflow.keras import layers, losses
 from tensorflow.keras.models import Model
 from tensorflow.linalg import diag
-from func_timeout import func_timeout, FunctionTimedOut
 from tensorflow.keras import callbacks
 from sklearn.cluster import KMeans
 from sklearn.metrics.cluster import normalized_mutual_info_score
 from networkx.generators.community import LFR_benchmark_graph
 from itertools import count
+from scipy.spatial import distance_matrix
 
-#see "Incorporating network structure with node contents for community detection on large networks using deep learning"
+#A = [a]_ij, a_ij = 0 ==>  b_ij = 1, a_ij = 1 ==> b_ij = beta > 1
+#Used for weighting reconstruction loss, see "Structural Deep Network Embedding" (Wang et. al, 2016)
+def adjacency_to_loss(A, beta):
+    B = np.empty(shape=np.shape(A))
+    B.fill(1)
+    for r in range(A.shape[0]):
+        for c in range(A.shape[1]):
+            if A[r,c] == 1:
+                B[r,c] = beta
+    return B
+
+#Sørensen–Dice similarity matrix
 def adjacency_to_similarity(A):
     S = np.zeros(shape=np.shape(A))
     n = np.shape(A)[0]
@@ -31,6 +42,7 @@ def adjacency_to_similarity(A):
             row_i = A[i]
             row_j = A[j]
             S[i,j] = 2 * np.sum(np.bitwise_and(row_i, row_j)) / (np.sum(row_i) + np.sum(row_j))
+    return S
             
 def cora_labels(graph):
     n = len(graph)
@@ -47,6 +59,22 @@ def cora_labels(graph):
 def create_adjacency_matrix(graph):
     return np.asarray(nx.adjacency_matrix(graph).todense())
 
+#A~ = A + I
+def create_adjacency_matrix_with_self_connections(graph):
+    A = create_adjacency_matrix(graph)
+    return np.add(A, np.identity(A.shape[0]))
+
+#parameters: numpy array 'labels,' where labels[i] is the community membership of the ith node
+#returns: 2D numpy array C where C[i,j] is 1 if nodes i and j belong to the same community and 0 otherwise
+def create_pairwise_community_membership_matrix(labels):
+    n = labels.shape[0]
+    C = np.identity(n)
+    for i in range(1, n):
+        for j in range(i):
+            if labels[i] == labels[j]:
+                C[i,j] = 1
+    return symmetrize(C)
+
 def create_degree_matrix(X):
     return np.diag(np.sum(X, axis=1))
 
@@ -57,7 +85,7 @@ def create_normalized_laplacian(A):
     func = np.vectorize(lambda i : 1/(math.sqrt(i)))
     D = create_degree_matrix(A)
     D2 = np.diag(func(D.diagonal()))
-    return np.matmul(D2, np.matmul(A, D2))
+    return np.matmul(D2, np.matmul(create_laplacian(A), D2)).astype(np.float32)
 
 def create_pairwise_community_indicator_matrix(community_list):
     num_vertices = len([v for sublist in community_list for v in sublist])
@@ -108,6 +136,15 @@ def karate_club_communities(graph):
             c2.append(x)
     return [c1, c2]
 
+#input: kxn matrix H
+#returns: 1xn matrix 'labels,' where labels[i] = argmax_{k} H[k,i]
+def nmf_cluster_membership(H):
+    n = H.shape[1]
+    labels = np.ndarray(n)
+    for i in range(n):
+        labels[i] = np.argmax(H[:,i])
+    return labels
+
 def plot_communities(graph, name):
     groups = set(nx.get_node_attributes(graph,name).values())
     mapping = dict(zip(sorted(groups),count()))
@@ -128,6 +165,13 @@ def polbooks_labels(graph):
     labels = np.asarray(labels, dtype=int)
     return labels
 
+def probability_transition_matrix(A, k):
+    D = create_degree_matrix(A)
+    P = np.matmul(np.linalg.inv(D), A)
+    for x in range(k-1):
+        P = np.matmul(P, P)
+    return P.astype('float32')
+
 def reconstruct_communities(labels):
     communities = {}
     for x in range(max(labels)+1):
@@ -139,3 +183,13 @@ def reconstruct_communities(labels):
     for x in communities:
         communities[x].sort()
     return communities
+
+#See Equation (2) in "Stacked autoencoder-based community detection method via an ensemble clustering framework" (Xu et al., 2020)
+def similarity_matrix_2(graph, kp):
+    B = nx.modularity_matrix(graph).astype('float32')
+    E = distance_matrix(B, B)
+    m = np.mean(np.mean(B, axis=0))
+    return np.exp(np.negative(np.divide(E, kp*m)))
+    
+def symmetrize(a):
+    return a + a.T - np.diag(a.diagonal())

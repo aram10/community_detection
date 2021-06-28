@@ -62,7 +62,6 @@ class Autoencoder(Model):
         self.learning_rate=learning_rate
         self.laplacian = None
         if adjacency is not None:
-            self.B = tf.cast(tf.convert_to_tensor(adjacency_to_loss(adjacency, self.beta)), dtype=tf.float32)
             self.laplacian = tf.cast(tf.convert_to_tensor(create_laplacian(adjacency)), dtype=tf.float32)
         
         initializer = tf.keras.initializers.RandomUniform(0, 0.01)
@@ -94,9 +93,8 @@ def loss(model, X):
     X_=model.decoder(H)
     diff = X-X_
     if model.laplacian is not None:
-        loss = tf.math.square(tf.norm(tf.math.multiply(model.B, X-X_)))
         reg_term = tf.linalg.trace(tf.linalg.matmul(tf.transpose(H), tf.linalg.matmul(model.laplacian, H)))
-        return loss + 2 * model.alpha * reg_term
+        return mse(X,X_) + 2 * model.alpha * reg_term
     else:
         return mse(X,X_)
     

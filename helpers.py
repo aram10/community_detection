@@ -22,8 +22,10 @@ from networkx.generators.community import LFR_benchmark_graph
 from itertools import count
 from scipy.spatial import distance_matrix
 
+#Note: the ordering of nodes in matrices is equivalent to the default ordering produced by networkx.Graph.nodes
+
 #A = [a]_ij, a_ij = 0 ==>  b_ij = 1, a_ij = 1 ==> b_ij = beta > 1
-#Used for weighting reconstruction loss, see "Structural Deep Network Embedding" (Wang et. al, 2016)
+#Used for weighting reconstruction loss, see "Structural Deep Network Embedding" (Wang et al., 2016)
 def adjacency_to_loss(A, beta):
     B = np.empty(shape=np.shape(A))
     B.fill(1)
@@ -43,6 +45,15 @@ def adjacency_to_similarity(A):
             row_j = A[j]
             S[i,j] = 2 * np.sum(np.bitwise_and(row_i, row_j)) / (np.sum(row_i) + np.sum(row_j))
     return S
+
+def average_community_size(labels):
+    c = {}
+    for i in range(len(labels)):
+        x = labels[i]
+        j = c.setdefault(x, 0)
+        c[x] += 1
+    l = c.values()
+    return sum(l) / len(l)
             
 def cora_labels(graph):
     n = len(graph)
@@ -78,6 +89,17 @@ def create_pairwise_community_membership_matrix(labels):
 def create_degree_matrix(X):
     return np.diag(np.sum(X, axis=1))
 
+#assumes features indexed as: {0: <feature_1>, 1: <feature_2>, ...}
+def create_feature_matrix(graph, num_features):
+    n = len(graph.nodes)
+    X = []
+    for n in graph.nodes:
+        x = []
+        for i in range(num_features):
+            x.append(graph.nodes[n][i])
+        X.append(x)
+    return np.array(X)
+       
 def create_laplacian(A):
     return create_degree_matrix(A) - A
 
@@ -136,6 +158,11 @@ def karate_club_communities(graph):
             c2.append(x)
     return [c1, c2]
 
+#See "Incorporating network structure with node contents for community detection on large networks using deep learning" (Cao et al., 2018)
+def markov_matrix(A, S):
+    D = create_degree_matrix(A)
+    return np.matmul(np.linalg.inv(D), S).astype('float32')
+
 #input: kxn matrix H
 #returns: 1xn matrix 'labels,' where labels[i] = argmax_{k} H[k,i]
 def nmf_cluster_membership(H):
@@ -193,3 +220,12 @@ def similarity_matrix_2(graph, kp):
     
 def symmetrize(a):
     return a + a.T - np.diag(a.diagonal())
+
+#Given an array-like input X, and a scalar k, applies a high-pass filter to every row of X, keeping
+#the largest k entries and setting the rest to 0
+def top_k(X, k):
+    X = np.array(X)
+    for i in range(len(X)):
+        l = np.argsort(X[i])[:len(X[i])-k]
+        np.put(X[i], l, 0)
+    return X

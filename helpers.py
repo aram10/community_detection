@@ -10,6 +10,7 @@ import math
 
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras import layers, losses
@@ -54,18 +55,6 @@ def average_community_size(labels):
         c[x] += 1
     l = c.values()
     return sum(l) / len(l)
-            
-def cora_labels(graph):
-    n = len(graph)
-    communities_list = list(frozenset((graph.nodes[node]['gt']) for node in graph.nodes))
-    communities = {}
-    for x in range(len(communities_list)):
-        communities[communities_list[x]] = x
-    labels = []
-    for node in graph.nodes:
-        labels.append(communities[graph.nodes[node]['gt']])
-    labels = np.asarray(labels, dtype=int)
-    return labels
 
 def create_adjacency_matrix(graph):
     return np.asarray(nx.adjacency_matrix(graph).todense())
@@ -120,6 +109,19 @@ def create_pairwise_community_indicator_matrix(community_list):
 def generate_LFR_network(num_vertices, mu, avg_degree, max_deg, min_c, max_c, max_i):
     return nx.LFR_benchmark_graph(num_vertices, 2, 1.2, mu, avg_degree, max_degree=max_deg, min_community=min_c, max_community=max_c, max_iters=max_i)
 
+#X, Y: matrices of size (n_samples, n_features)
+#result: L2 norm of principal angles between principal vectors
+def geodesic_distance(X, Y):
+    pca_x = PCA()
+    pca_y = PCA()
+    pca_x.fit(X)
+    pca_y.fit(Y)
+    A = pca_x.components_
+    B = pca_y.components_
+    C = np.matmul(np.transpose(A), B)
+    u, s, vh = np.linalg.svd(C)
+    return np.linalg.norm(np.arccos(s))
+
 def get_community_labels(graph, name):
     communities = get_community_list(graph, name)
     labels = np.zeros(len(graph), dtype=int)
@@ -131,13 +133,37 @@ def get_community_labels(graph, name):
     return labels
 
 def get_community_list(graph, name):
-    com_list = list({frozenset(graph.nodes[v][name]) for v in graph})
-    communities = [list(com_list[x]) for x in range(0, len(com_list))]
-    return communities
+    return list(frozenset((graph.nodes[node][name]) for node in graph.nodes))
 
 def get_num_communities(graph, name):
-    return len(list({frozenset(graph.nodes[v][name]) for v in graph}))
+    return len(get_community_list(graph, name))
 
+def graham_schmidt(X, row_vecs=True, norm = True):
+    if not row_vecs:
+        X = X.T
+    Y = X[0:1,:].copy()
+    for i in range(1, X.shape[0]):
+        proj = np.diag((X[i,:].dot(Y.T)/np.linalg.norm(Y,axis=1)**2).flat).dot(Y)
+        Y = np.vstack((Y, X[i,:] - proj.sum(0)))
+    if norm:
+        Y = np.diag(1/np.linalg.norm(Y,axis=1)).dot(Y)
+    if row_vecs:
+        return Y
+    else:
+        return Y.T
+
+def graph_labels(graph):
+    n = len(graph)
+    communities_list = get_community_list(graph, 'gt')
+    communities = {}
+    for x in range(len(communities_list)):
+        communities[communities_list[x]] = x
+    labels = []
+    for node in graph.nodes:
+        labels.append(communities[graph.nodes[node]['gt']])
+    labels = np.asarray(labels, dtype=int)
+    return labels
+    
 def karate_club_labels(graph):
     clublist = [(graph.nodes[v]['club']) for v in graph]
     communities = np.zeros(len(graph), dtype=int)
@@ -162,6 +188,10 @@ def karate_club_communities(graph):
 def markov_matrix(A, S):
     D = create_degree_matrix(A)
     return np.matmul(np.linalg.inv(D), S).astype('float32')
+
+#X (mxn) --> X - J*X/m
+def mean_matrix(X):
+    return tf.math.divide(tf.linalg.matmul(X, tf.ones(shape=X.shape)), X.shape[0])
 
 #input: kxn matrix H
 #returns: 1xn matrix 'labels,' where labels[i] = argmax_{k} H[k,i]

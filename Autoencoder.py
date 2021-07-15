@@ -6,6 +6,7 @@ import networkx as nx
 import random
 import pickle
 import itertools
+import math
 
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
@@ -36,7 +37,6 @@ class SparseRegularizer(keras.regularizers.Regularizer):
     def __call__(self, activation):
         rho = self.rho
         beta = self.beta
-        activation = tf.nn.sigmoid(activation)
         rho_bar = K.mean(activation, axis=0)
         rho_bar = K.maximum(rho_bar,1e-10) 
         KLs = rho*K.log(rho/rho_bar) + (1-rho)*K.log((1-rho)/(1-rho_bar))
@@ -50,19 +50,47 @@ class SparseRegularizer(keras.regularizers.Regularizer):
 
 class Autoencoder(Model):
     
-    def __init__(self, n, latentdim, e_activ='sigmoid', d_activ='sigmoid', k_reg=None, act_reg=None, adjacency=None, alpha=0.2, beta=10, deep_dims=None, learning_rate=0.025):
+    """
+    Attributes:
+        n: number of nodes in network
+        latentdim: dimension of embedding
+        e_activ: activation function for encoder
+        d_activ: activation function for decoder
+        k_reg: hidden layer weights regularizer
+        act_reg: hidden layer activity regularizer
+        adjacency: graph adjacency matrix
+        beta: scalar multiplier for sparsity constraint, if any
+        deep_dims: if not a single-layer autoencoder, a list of dimensions not including n and latentdim
+        learning_rate: learning rate
+        lam: scalar multiplier for temporal smoothness term, if doing dynamic CD
+        loss: loss function
+        subspace_distance: ordinal value for metric to compare latent space distances, if doing dynamic CD
+            Let A (nxp), B (nxr) be subspaces in question.
+            0: sqrt(max(p,r) - Tr(A*A^{T}*B*B^{T}))
+            1: (1/sqrt(2)) * ||A*A^{T} - B*B^{T}||_{F}
+        c: number of communities for this time step
+        c_old: number of communities for previous time step
+        full_rank: whether or not to consider entire latent space for temporal smoothness loss or only take largest c/c_old eigenvectors
+        Z_old: community indicator matrix for previous time step
+    """
+    
+    def __init__(self, n, latentdim, e_activ='sigmoid', d_activ='sigmoid', k_reg=None, act_reg=None, adjacency=None, beta=10, deep_dims=None, learning_rate=0.025, lam=0.5, loss=tf.keras.losses.MeanSquaredError(), subspace_distance=0, c=-1, c_old=-1, full_rank=True, Z_old=None):
         super(Autoencoder, self).__init__()
         self.n = n
         self.latentdim = latentdim
         self.k_reg = k_reg
         self.history = {}
-        self.alpha = alpha
         self.beta = beta
         self.adjacency = adjacency
         self.learning_rate=learning_rate
-        self.laplacian = None
-        if adjacency is not None:
-            self.laplacian = tf.cast(tf.convert_to_tensor(create_laplacian(adjacency)), dtype=tf.float32)
+        self.lam = lam
+        self.H = None
+        self.c = c
+        self.c_old = c_old
+        self.loss = loss
+        self.full_rank = full_rank
+        self.subspace_distance = subspace_distance
+        self.Z_old = Z_old
         
         initializer = tf.keras.initializers.RandomUniform(0, 0.01)
         
@@ -85,18 +113,42 @@ class Autoencoder(Model):
         encoded = self.encoder(X)
         decoded = self.decoder(encoded)
         return decoded
-
-def loss(model, X):
-    mse = tf.keras.losses.MeanSquaredError()
     
+    def set_past_embedding(self, H):
+        self.H = H;
+        
+def loss(model, X):    
     H = model.encoder(X)
     X_=model.decoder(H)
-    diff = X-X_
-    if model.laplacian is not None:
-        reg_term = tf.linalg.trace(tf.linalg.matmul(tf.transpose(H), tf.linalg.matmul(model.laplacian, H)))
-        return mse(X,X_) + 2 * model.alpha * reg_term
+    #if we have an embedding for last timestep, use dynamic CD
+    if model.H is not None and model.c != -1 and model.c_old != -1:
+        K1 = tf.linalg.matmul(H, tf.transpose(H))
+        w1, U1 = tf.linalg.eigh(K1)
+        K2 = tf.linalg.matmul(model.H, tf.transpose(model.H))
+        w2, U2 = tf.linalg.eigh(K2)
+        #whether or not to consider only largest k eigenvectors, k=#communities
+        if model.full_rank == False:
+            w1 = w1[model.n - model.c:]
+            U1 = U1[:,model.n - model.c:]
+            w2 = w2[model.n - model.c_old:]
+            U2 = U2[:,model.n - model.c_old:]
+        P1 = tf.linalg.matmul(U1, tf.transpose(U1))
+        P2 = tf.linalg.matmul(U2, tf.transpose(U2))
+        #chordal distance
+        if model.subspace_distance == 1:
+            norm = tf.norm(tf.math.subtract(P1, P2))
+            s_dist = 1/np.sqrt(2) * norm
+            return model.loss(X,X_) + s_dist
+        #metric proposed in Zuccon et al., 2014
+        else:
+            s_dist = np.sqrt(max(model.c, model.c_old) - tf.linalg.trace(tf.matmul(P1, P2)))
+            if math.isnan(s_dist):
+                print(P1)
+                print(P2)
+                return model.loss(X,X_)
+            return model.loss(X,X_) + s_dist
     else:
-        return mse(X,X_)
+        return model.loss(X,X_)
     
 def train_step(loss, model, original, epoch):
     with tf.GradientTape() as tape:

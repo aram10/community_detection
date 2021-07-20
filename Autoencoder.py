@@ -74,7 +74,7 @@ class Autoencoder(Model):
         Z_old: community indicator matrix for previous time step
     """
     
-    def __init__(self, n, latentdim, e_activ='sigmoid', d_activ='sigmoid', k_reg=None, act_reg=None, adjacency=None, beta=10, deep_dims=None, learning_rate=0.025, lam=0.5, loss=tf.keras.losses.MeanSquaredError(), subspace_distance=0, c=-1, c_old=-1, full_rank=True, Z_old=None):
+    def __init__(self, n, latentdim, e_activ='sigmoid', d_activ='sigmoid', k_reg=None, act_reg=None, adjacency=None, beta=10, deep_dims=None, learning_rate=0.025, lam=1, loss=tf.keras.losses.MeanSquaredError(), subspace_distance=0, c=-1, c_old=-1, full_rank=True, Z_old=None):
         super(Autoencoder, self).__init__()
         self.n = n
         self.latentdim = latentdim
@@ -138,15 +138,15 @@ def loss(model, X):
         if model.subspace_distance == 1:
             norm = tf.norm(tf.math.subtract(P1, P2))
             s_dist = 1/np.sqrt(2) * norm
-            return model.loss(X,X_) + s_dist
+            return model.loss(X,X_) + model.lam * s_dist
         #metric proposed in Zuccon et al., 2014
         else:
             s_dist = np.sqrt(max(model.c, model.c_old) - tf.linalg.trace(tf.matmul(P1, P2)))
-            if math.isnan(s_dist):
-                print(P1)
-                print(P2)
-                return model.loss(X,X_)
-            return model.loss(X,X_) + s_dist
+            return model.loss(X,X_) + model.lam * s_dist
+    elif model.Z_old is not None:
+        K = tf.matmul(model.Z_old, tf.transpose(model.Z_old))
+        s  = tf.matmul(tf.transpose(H), tf.matmul(K, H))
+        return model.loss(X,X_) + model.lam * s
     else:
         return model.loss(X,X_)
     

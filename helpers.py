@@ -106,6 +106,22 @@ def create_pairwise_community_indicator_matrix(community_list):
             H[pair[0],pair[1]] = 1
     return H
 
+def create_community_indicator_matrix(communities, n):
+    first = True
+    O = None
+    for key in sorted(list(communities.keys())):
+        x = np.zeros(shape=(n,1))
+        vertices = communities[key]
+        for vertex in vertices:
+            x[vertex] = 1
+        if first:
+            O = x
+            first = False
+        else:
+            O = np.append(O, x, axis=1)
+    return O.astype('float32')
+                   
+       
 def generate_LFR_network(num_vertices, mu, avg_degree, max_deg, min_c, max_c, max_i):
     return nx.LFR_benchmark_graph(num_vertices, 2, 1.2, mu, avg_degree, max_degree=max_deg, min_community=min_c, max_community=max_c, max_iters=max_i)
 
@@ -121,6 +137,14 @@ def geodesic_distance(X, Y):
     C = np.matmul(np.transpose(A), B)
     u, s, vh = np.linalg.svd(C)
     return np.linalg.norm(np.arccos(s))
+
+def get_communities(graph, name):
+    communities = {}
+    for community in get_community_list(graph, name):
+        communities[community] = []
+    for node in graph.nodes:
+        communities[graph.nodes[node]['gt']].append(node)
+    return communities
 
 def get_community_labels(graph, name):
     communities = get_community_list(graph, name)
@@ -184,6 +208,20 @@ def karate_club_communities(graph):
             c2.append(x)
     return [c1, c2]
 
+
+#Converts an array of clustering assignments to a dictionary, with nodes in counting order
+def labels_to_dict(community_labels):
+    n = len(community_labels)
+    d = {}
+    count = 0
+    for label in community_labels:
+        if label in d:
+            d[label].append(count)
+        else:
+            d[label] = [count]
+        count += 1
+    return d
+
 #See "Incorporating network structure with node contents for community detection on large networks using deep learning" (Cao et al., 2018)
 def markov_matrix(A, S):
     D = create_degree_matrix(A)
@@ -228,6 +266,15 @@ def probability_transition_matrix(A, k):
     for x in range(k-1):
         P = np.matmul(P, P)
     return P.astype('float32')
+
+def proximity_matrix(graph, alpha):
+    n = len(graph.nodes)
+    dist = nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(graph)
+    for i in range(n):
+        for j in range(n):
+            if(dist[i][j] >= 2):
+                dist[i][j] = np.exp(alpha * (2 - dist[i][j]))
+    return dist
 
 def reconstruct_communities(labels):
     communities = {}

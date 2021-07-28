@@ -72,9 +72,12 @@ class Autoencoder(Model):
         c_old: number of communities for previous time step
         full_rank: whether or not to consider entire latent space for temporal smoothness loss or only take largest c/c_old eigenvectors
         Z_old: community indicator matrix for previous time step
+        fine_tuning: If training a deep model, whether or not to fine-tune all layers together with a low learning rate after pretraining
+        fine_tuning_learning_rate: Learning rate for fine tuning
+        fine_tuning_training_epochs: Number of epochs to fine tune for
     """
     
-    def __init__(self, n, latentdim, e_activ='sigmoid', d_activ='sigmoid', k_reg=None, act_reg=None, adjacency=None, beta=10, deep_dims=None, learning_rate=0.025, lam=1, loss=tf.keras.losses.MeanSquaredError(), subspace_distance=0, c=-1, c_old=-1, full_rank=True, Z_old=None):
+    def __init__(self, n, latentdim, e_activ='sigmoid', d_activ='sigmoid', k_reg=None, act_reg=None, adjacency=None, beta=10, deep_dims=None, learning_rate=0.025, lam=1, loss=tf.keras.losses.MeanSquaredError(), subspace_distance=0, c=-1, c_old=-1, full_rank=True, Z_old=None, fine_tuning=True, fine_tuning_learning_rate=0.0001, fine_tuning_training_epochs=10):
         super(Autoencoder, self).__init__()
         self.n = n
         self.latentdim = latentdim
@@ -91,31 +94,64 @@ class Autoencoder(Model):
         self.full_rank = full_rank
         self.subspace_distance = subspace_distance
         self.Z_old = Z_old
+        self.fine_tuning = fine_tuning
+        self.fine_tuning_learning_rate = fine_tuning_learning_rate
+        self.fine_tuning_training_epochs = fine_tuning_training_epochs
         
         initializer = tf.keras.initializers.RandomUniform(0, 0.01)
+        
+        self.encoder_layers = []
+        self.decoder_layers = []
         
         self.encoder = tf.keras.Sequential()
         self.decoder = tf.keras.Sequential()
         
-        self.encoder.add(tf.keras.layers.InputLayer(input_shape=(n,), dtype=tf.float32))
-        
+        #add extra layers if deep network
         if deep_dims is not None:
             for dim in deep_dims:
-                self.encoder.add(layers.Dense(dim, activation=e_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, activity_regularizer=act_reg, dtype=tf.float32))
+                self.encoder_layers.append(layers.Dense(dim, activation=e_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, activity_regularizer=act_reg, dtype=tf.float32))
             for dim in deep_dims[::-1]:
-                self.decoder.add(layers.Dense(dim, activation=d_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, dtype=tf.float32))
+                self.decoder_layers.append(layers.Dense(dim, activation=d_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, dtype=tf.float32))
             
-        self.encoder.add(layers.Dense(latentdim, activation=e_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, activity_regularizer=act_reg, dtype=tf.float32))
+        self.encoder_layers.append(layers.Dense(latentdim, activation=e_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, activity_regularizer=act_reg, dtype=tf.float32))
         
-        self.decoder.add(layers.Dense(n, activation=d_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, dtype=tf.float32))
+        self.decoder_layers.append(layers.Dense(n, activation=d_activ, kernel_initializer=initializer, bias_initializer=initializer, kernel_regularizer=k_reg, dtype=tf.float32))
         
+        self.encoder = tf.keras.Sequential(self.encoder_layers)
+        self.decoder = tf.keras.Sequential(self.decoder_layers)
+               
     def call(self, X):
         encoded = self.encoder(X)
         decoded = self.decoder(encoded)
         return decoded
     
+    #embedding of last time step, if temporal
     def set_past_embedding(self, H):
         self.H = H;
+        
+    def weights_length(self):
+        return len(self.encoder_layers)
+    
+    def freeze_all_layers(self):
+        for layer in self.encoder_layers:
+            layer.trainable = False
+        for layer in self.decoder_layers:
+            layer.trainable = False
+                    
+    def unfreeze_all_layers(self):
+        for layer in self.encoder_layers:
+            layer.trainable = True
+        for layer in self.decoder_layers:
+            layer.trainable = True
+            
+    def freeze_layer_pair(self, index):
+        self.encoder_layers[index].trainable = False
+        self.decoder_layers[(self.weights_length() - 1) - index].trainable = False     
+        
+    def unfreeze_layer_pair(self, index):
+        self.encoder_layers[index].trainable = True
+        self.decoder_layers[(self.weights_length() - 1) - index].trainable = True
+        
         
 def loss(model, X):    
     H = model.encoder(X)
@@ -150,9 +186,11 @@ def loss(model, X):
     else:
         return model.loss(X,X_)
     
-def train_step(loss, model, original, epoch):
+def train_step(loss, model, original, epoch, fine_tuning=False):
     with tf.GradientTape() as tape:
         opt=tf.keras.optimizers.Adam(learning_rate=model.learning_rate)
+        if(fine_tuning):
+            opt=tf.keras.optimizers.Adam(learning_rate=model.fine_tuning_learning_rate)
         l = loss(model, original)
         model.history[epoch] = l
         gradients = tape.gradient(l, model.trainable_variables)
@@ -165,7 +203,23 @@ def train(model, epochs, batch_size, data):
     training_dataset = training_dataset.shuffle(data.shape[0])
     training_dataset = training_dataset.batch(batch_size)
     training_dataset = training_dataset.prefetch(tf.data.experimental.AUTOTUNE)
-    for epoch in range(epochs):
-        for step, batch_features in enumerate(training_dataset):
-            train_step(loss, model, batch_features, epoch)
+    
+    if(model.weights_length() == 1):
+        for epoch in range(epochs):
+            for step, batch_features in enumerate(training_dataset):
+                train_step(loss, model, batch_features, epoch)
+    else:
+        #layer-by-layer training of deep model
+        model.freeze_all_layers()
+        for x in range(model.weights_length()):
+            model.unfreeze_layer_pair(x)
+            for epoch in range(epochs):
+                for step, batch_features in enumerate(training_dataset):
+                    train_step(loss, model, batch_features, epoch)
+            model.freeze_layer_pair(x)
+        model.unfreeze_all_layers()
+        if(model.fine_tuning):
+            for epoch in range(model.fine_tuning_training_epochs):
+                for step, batch_features in enumerate(training_dataset):
+                    train_step(loss, model, batch_features, epoch, fine_tuning=True)
     return model.history

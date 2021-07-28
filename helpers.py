@@ -120,8 +120,7 @@ def create_community_indicator_matrix(communities, n):
         else:
             O = np.append(O, x, axis=1)
     return O.astype('float32')
-                   
-       
+
 def generate_LFR_network(num_vertices, mu, avg_degree, max_deg, min_c, max_c, max_i):
     return nx.LFR_benchmark_graph(num_vertices, 2, 1.2, mu, avg_degree, max_degree=max_deg, min_community=min_c, max_community=max_c, max_iters=max_i)
 
@@ -138,6 +137,11 @@ def geodesic_distance(X, Y):
     u, s, vh = np.linalg.svd(C)
     return np.linalg.norm(np.arccos(s))
 
+'''
+For community attributes, parameter 'name' is 'gt' for 'ground truth'
+'''
+
+#returns dictionary of communities mapped to a list of nodes in that community
 def get_communities(graph, name):
     communities = {}
     for community in get_community_list(graph, name):
@@ -146,21 +150,12 @@ def get_communities(graph, name):
         communities[graph.nodes[node]['gt']].append(node)
     return communities
 
-def get_community_labels(graph, name):
-    communities = get_community_list(graph, name)
-    labels = np.zeros(len(graph), dtype=int)
-    x = 0
-    for community in communities:
-        for vertex in community:
-            labels[vertex] = x
-        x += 1
-    return labels
-
+#list of all communities in the graph
 def get_community_list(graph, name):
     return list(frozenset((graph.nodes[node][name]) for node in graph.nodes))
 
-def get_num_communities(graph, name):
-    return len(get_community_list(graph, name))
+def get_num_communities(graph):
+    return len(get_community_list(graph, 'gt'))
 
 def graham_schmidt(X, row_vecs=True, norm = True):
     if not row_vecs:
@@ -176,6 +171,7 @@ def graham_schmidt(X, row_vecs=True, norm = True):
     else:
         return Y.T
 
+#get the ground-truth community labelings of all vertices in the graph
 def graph_labels(graph):
     n = len(graph)
     communities_list = get_community_list(graph, 'gt')
@@ -244,12 +240,11 @@ def plot_communities(graph, name):
     groups = set(nx.get_node_attributes(graph,name).values())
     mapping = dict(zip(sorted(groups),count()))
     nodes = graph.nodes()
-    colors = [mapping[graph.node[n][name]] for n in nodes]
+    colors = [mapping[graph.nodes[n][name]] for n in nodes]
 
     pos = nx.spring_layout(graph)
     ec = nx.draw_networkx_edges(graph, pos, alpha=0.2)
-    nc = nx.draw_networkx_nodes(graph, pos, nodelist=nodes, node_color=colors, 
-                            with_labels=False, node_size=100, cmap=plt.cm.jet)
+    nc = nx.draw_networkx_nodes(graph, pos, nodelist=nodes, node_color=colors, node_size=100, cmap=plt.cm.jet)
     
 def polbooks_labels(graph):
     n = len(graph)
@@ -260,6 +255,7 @@ def polbooks_labels(graph):
     labels = np.asarray(labels, dtype=int)
     return labels
 
+#graph representation based on k-step random walk
 def probability_transition_matrix(A, k):
     D = create_degree_matrix(A)
     P = np.matmul(np.linalg.inv(D), A)
@@ -267,6 +263,8 @@ def probability_transition_matrix(A, k):
         P = np.matmul(P, P)
     return P.astype('float32')
 
+#graph representation based on Gaussian kernel
+#alpha is attentuation parameter
 def proximity_matrix(graph, alpha):
     n = len(graph.nodes)
     dist = nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(graph)
@@ -276,6 +274,7 @@ def proximity_matrix(graph, alpha):
                 dist[i][j] = np.exp(alpha * (2 - dist[i][j]))
     return dist
 
+#convert labeling to dictionary
 def reconstruct_communities(labels):
     communities = {}
     for x in range(max(labels)+1):
